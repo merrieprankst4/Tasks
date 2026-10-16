@@ -24,16 +24,40 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
+type Priority = "high" | "medium" | "low";
+
 type Task = {
   id: string;
   text: string;
   completed: boolean;
   createdAt: number;
+  priority: Priority;
 };
 
 type Filter = "all" | "active" | "completed";
 
 const STORAGE_KEY = "taskflow-tasks-v1";
+
+const PRIORITIES: Priority[] = ["high", "medium", "low"];
+
+const priorityLabels: Record<Priority, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
+const priorityBadgeStyles: Record<Priority, string> = {
+  high: "border-destructive/25 bg-destructive/10 text-destructive",
+  medium: "border-primary/20 bg-primary/10 text-primary",
+  low: "border-border bg-muted text-muted-foreground",
+};
+
+// Display order: High first, then Medium, then Low.
+const priorityRank: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
+
+function isPriority(value: unknown): value is Priority {
+  return value === "high" || value === "medium" || value === "low";
+}
 
 function loadTasks(): Task[] {
   if (typeof window === "undefined") return [];
@@ -42,14 +66,20 @@ function loadTasks(): Task[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t): t is Task =>
-        typeof t === "object" &&
-        t !== null &&
-        typeof t.id === "string" &&
-        typeof t.text === "string" &&
-        typeof t.completed === "boolean",
-    );
+    return parsed
+      .filter(
+        (t): t is Omit<Task, "priority"> & { priority?: unknown } =>
+          typeof t === "object" &&
+          t !== null &&
+          typeof t.id === "string" &&
+          typeof t.text === "string" &&
+          typeof t.completed === "boolean",
+      )
+      .map((t) => ({
+        ...t,
+        // Tasks saved before priorities existed default to Medium.
+        priority: isPriority(t.priority) ? t.priority : "medium",
+      }));
   } catch {
     return [];
   }
@@ -59,6 +89,7 @@ function Index() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftPriority, setDraftPriority] = useState<Priority>("medium");
   const [filter, setFilter] = useState<Filter>("all");
 
   // Load from localStorage after hydration to avoid SSR mismatch.
@@ -81,14 +112,16 @@ function Index() {
   const completedCount = tasks.length - remaining;
 
   const visibleTasks = useMemo(() => {
-    switch (filter) {
-      case "active":
-        return tasks.filter((t) => !t.completed);
-      case "completed":
-        return tasks.filter((t) => t.completed);
-      default:
-        return tasks;
-    }
+    const filtered =
+      filter === "active"
+        ? tasks.filter((t) => !t.completed)
+        : filter === "completed"
+          ? tasks.filter((t) => t.completed)
+          : tasks;
+    // Sort a copy so saved order and task data stay untouched.
+    return [...filtered].sort(
+      (a, b) => priorityRank[a.priority] - priorityRank[b.priority],
+    );
   }, [tasks, filter]);
 
   function addTask(e: FormEvent) {
@@ -101,15 +134,23 @@ function Index() {
         text,
         completed: false,
         createdAt: Date.now(),
+        priority: draftPriority,
       },
       ...prev,
     ]);
     setDraft("");
+    setDraftPriority("medium");
   }
 
   function toggleTask(id: string) {
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)),
+    );
+  }
+
+  function setTaskPriority(id: string, priority: Priority) {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, priority } : t)),
     );
   }
 
@@ -162,7 +203,7 @@ function Index() {
 
         <form
           onSubmit={addTask}
-          className="mb-6 flex gap-2.5 rounded-2xl border border-border bg-card p-2 shadow-sm"
+          className="mb-6 flex flex-col gap-2.5 rounded-2xl border border-border bg-card p-2 shadow-sm sm:flex-row"
         >
           <input
             type="text"
@@ -172,15 +213,29 @@ function Index() {
             aria-label="New task"
             className="h-11 min-w-0 flex-1 rounded-xl bg-transparent px-3.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
           />
-          <button
-            type="submit"
-            disabled={!draft.trim()}
-            className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" aria-hidden />
-            <span className="hidden sm:inline">Add Task</span>
-            <span className="sm:hidden">Add</span>
-          </button>
+          <div className="flex gap-2.5">
+            <select
+              value={draftPriority}
+              onChange={(e) => setDraftPriority(e.target.value as Priority)}
+              aria-label="Priority for new task"
+              className="h-11 shrink-0 rounded-xl border border-border bg-background px-3 text-sm font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring/30"
+            >
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {priorityLabels[p]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              disabled={!draft.trim()}
+              className="inline-flex h-11 flex-1 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+              <span className="hidden sm:inline">Add Task</span>
+              <span className="sm:hidden">Add</span>
+            </button>
+          </div>
         </form>
 
         <div
@@ -261,15 +316,38 @@ function Index() {
                 >
                   {task.completed && <Check className="h-3.5 w-3.5" aria-hidden />}
                 </button>
-                <span
-                  className={`flex-1 text-sm leading-snug transition-colors ${
-                    task.completed
-                      ? "text-muted-foreground/80 line-through decoration-border"
-                      : "text-foreground"
-                  }`}
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span
+                    className={`text-sm leading-snug transition-colors ${
+                      task.completed
+                        ? "text-muted-foreground/80 line-through decoration-border"
+                        : "text-foreground"
+                    }`}
+                  >
+                    {task.text}
+                  </span>
+                  <span
+                    className={`inline-flex w-fit items-center rounded-full border px-2 py-px text-[11px] font-medium leading-4 ${
+                      priorityBadgeStyles[task.priority]
+                    } ${task.completed ? "opacity-60" : ""}`}
+                  >
+                    {priorityLabels[task.priority]}
+                  </span>
+                </div>
+                <select
+                  value={task.priority}
+                  onChange={(e) =>
+                    setTaskPriority(task.id, e.target.value as Priority)
+                  }
+                  aria-label={`Change priority of "${task.text}"`}
+                  className="h-8 shrink-0 rounded-lg border border-transparent bg-transparent px-1.5 text-xs font-medium text-muted-foreground opacity-60 outline-none transition hover:border-border hover:bg-background hover:text-foreground focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-hover:focus:opacity-100"
                 >
-                  {task.text}
-                </span>
+                  {PRIORITIES.map((p) => (
+                    <option key={p} value={p}>
+                      {priorityLabels[p]}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   aria-label={`Delete "${task.text}"`}
